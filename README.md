@@ -13,9 +13,13 @@ Right-click any Slack message, choose "Add to Notion", type a task name, done.
 ### 1. Deploy to Railway
 
 1. Go to [railway.app](https://railway.app) and create a new project
-2. Choose **Deploy from GitHub repo** and connect this repository
-3. Railway will detect the Gemfile and build automatically
-4. Once deployed, go to **Settings > Networking** and click **Generate Domain** -- this gives you your public URL (e.g. `https://your-app.up.railway.app`)
+2. Choose **GitHub repository** and connect this repository
+3. Ensure your repo includes:
+  - `Gemfile.lock` (must be committed)
+  - `.ruby-version` (with your Ruby version, e.g. `3.2.2`)
+  - `Procfile` (with `web: bundle exec puma -C config.ru` or `web: ruby app.rb`)
+4. Railway will detect the Gemfile and build automatically
+5. Once deployed, go to **Settings > Networking** and click **Generate Domain** -- this gives you your public URL (e.g. `https://your-app.up.railway.app`)
 
 ### 2. Set environment variables in Railway
 
