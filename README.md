@@ -2,71 +2,72 @@
 
 Right-click any Slack message, choose "Add to Notion", type a task name, done.
 
+## Prerequisites
+
+- A Railway account (railway.app)
+- A Slack workspace where you can create apps
+- A Notion integration token and database ID
+
 ## Setup
 
-### 1. Install dependencies
+### 1. Deploy to Railway
 
-```bash
-bundle install
-```
+1. Go to [railway.app](https://railway.app) and create a new project
+2. Choose **Deploy from GitHub repo** and connect this repository
+3. Railway will detect the Gemfile and build automatically
+4. Once deployed, go to **Settings > Networking** and click **Generate Domain** -- this gives you your public URL (e.g. `https://your-app.up.railway.app`)
 
-### 2. Configure environment
+### 2. Set environment variables in Railway
 
-```bash
-cp .env.example .env
-```
+Under your service's **Variables** tab, add:
 
-Fill in your values (see below for where to get each one).
+| Key | Value |
+|-----|-------|
+| `SLACK_BOT_TOKEN` | `xoxb-...` (from Slack app, see below) |
+| `SLACK_SIGNING_SECRET` | From Slack app Basic Information |
+| `NOTION_TOKEN` | Your Notion integration token |
+| `NOTION_DATABASE_ID` | Your Notion database ID |
 
-### 3. Expose your local server
+Railway sets `RACK_ENV=production` automatically -- dotenv will not run in production, which is correct.
 
-Slack needs to reach your machine. Use [ngrok](https://ngrok.com):
+### 3. Create a Slack App
 
-```bash
-ngrok http 4567
-```
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App > From scratch**
+2. Name it (e.g. "Notion Tasks") and pick your workspace
 
-Copy the `https://...ngrok-free.app` URL. You'll need it for the Slack app config.
+#### Bot Token Scopes
 
-### 4. Create a Slack App
-
-1. Go to https://api.slack.com/apps and click **Create New App > From scratch**
-2. Name it (e.g. "Notion Tasks"), pick your workspace
-
-#### OAuth scopes (Bot Token Scopes)
-
-Under **OAuth & Permissions**, add:
+Under **OAuth & Permissions > Bot Token Scopes**, add:
 - `chat:write`
 - `channels:history`
 - `groups:history`
 - `im:history`
 - `mpim:history`
-- `links:read`
 
-Install the app to your workspace, copy the **Bot User OAuth Token** → `SLACK_BOT_TOKEN` in `.env`
+Install the app to your workspace. Copy the **Bot User OAuth Token** into `SLACK_BOT_TOKEN` in Railway.
 
-#### Signing secret
+#### Signing Secret
 
-Under **Basic Information**, copy the **Signing Secret** → `SLACK_SIGNING_SECRET` in `.env`
+Under **Basic Information**, copy the **Signing Secret** into `SLACK_SIGNING_SECRET` in Railway.
 
-#### Message shortcut
+#### Interactivity & Shortcut
 
 Under **Interactivity & Shortcuts**:
 - Toggle Interactivity **on**
-- Request URL: `https://your-ngrok-url/slack/actions`
+- Set Request URL to: `https://your-app.up.railway.app/slack/actions`
 - Under Shortcuts, click **Create New Shortcut**
   - Choose **On messages**
-  - Name: "Add to Notion" (or whatever you want to see in the menu)
+  - Name: "Add to Notion"
   - Callback ID: `add_to_notion`
 
-### 5. Notion setup
+### 4. Notion setup
 
-Your Notion integration token goes in `NOTION_TOKEN`.
+Your integration token goes in `NOTION_TOKEN`.
 
-For `NOTION_DATABASE_ID`: open your task database in Notion, copy the URL. The ID is the 32-character string before the `?`. Example:
-`https://notion.so/yourworkspace/abc123def456...?v=...` → ID is `abc123def456...`
+For `NOTION_DATABASE_ID`: open your task database in Notion and copy the URL. The ID is the 32-character string before the `?`:
+`https://notion.so/yourworkspace/abc123...?v=...` -- ID is `abc123...`
 
-Make sure your integration has been shared with that database (open the database in Notion > ... menu > Connections > add your integration).
+Make sure your integration is shared with the database: open the database in Notion > **...** menu > **Connections** > add your integration.
 
 #### Required database fields
 
@@ -74,47 +75,23 @@ Make sure your integration has been shared with that database (open the database
 |-------|------|
 | Task Name | Title |
 | Source | URL |
-| Status | Status (with an "Incoming" option) |
+| Status | Status (must have an "Incoming" option) |
 
-The message body goes into the page content, not a property.
+The Slack message body is written to the page content, not a property.
 
-### 6. Run it
+## Local development
 
 ```bash
+bundle install
+cp .env.example .env
+# fill in your values
 ruby app.rb
 ```
 
-Server runs on port 4567. Keep ngrok running in a separate terminal.
-
-## Running persistently on your Mac
-
-If you want it to survive reboots without thinking about it, create a launchd plist:
+For local development you will need a tunnel to expose localhost to Slack. [ngrok](https://ngrok.com) works:
 
 ```bash
-# Edit path and token values to match your setup
-cat > ~/Library/LaunchAgents/com.yourname.slack-notion.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.yourname.slack-notion</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/ruby</string>
-    <string>/path/to/slack-to-notion/app.rb</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>/path/to/slack-to-notion</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-EOF
-
-launchctl load ~/Library/LaunchAgents/com.yourname.slack-notion.plist
+ngrok http 4567
 ```
 
-Note: ngrok free tier generates a new URL on each restart, so you'd need to update the Slack app's Request URL each time. If that's annoying, ngrok paid gives you a stable domain, or you could self-host this on a cheap VPS.
+Point the Slack app's Request URL at the ngrok HTTPS URL while developing. Switch it back to your Railway URL when done.

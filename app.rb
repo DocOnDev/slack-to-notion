@@ -2,7 +2,8 @@ require "sinatra"
 require "json"
 require "net/http"
 require "uri"
-require "dotenv/load"
+require "openssl"
+require "dotenv/load" if ENV["RACK_ENV"] != "production"
 
 set :port, ENV["PORT"] || 4567
 
