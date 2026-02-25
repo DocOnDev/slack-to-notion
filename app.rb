@@ -1,19 +1,42 @@
 require "sinatra"
 require "json"
+require "logger"
 require "net/http"
 require "uri"
 require "openssl"
 require "dotenv/load" if ENV["RACK_ENV"] != "production"
 
+APP_LOGGER = Logger.new($stdout)
+APP_LOGGER.level = Logger::INFO
+
 set :port, ENV["PORT"] || 4567
+
+before do
+  if request.path_info == "/slack/actions"
+    APP_LOGGER.info("Incoming Slack request: #{request.request_method} #{request.path_info}")
+  end
+end
 
 # Verify Slack requests are legitimate
 def verify_slack_request(request)
   timestamp = request.env["HTTP_X_SLACK_REQUEST_TIMESTAMP"]
   signature = request.env["HTTP_X_SLACK_SIGNATURE"]
 
+  if timestamp.nil? || signature.nil?
+    APP_LOGGER.warn("Missing Slack signature headers")
+    return false
+  end
+
+  if ENV["SLACK_SIGNING_SECRET"].to_s.strip.empty?
+    APP_LOGGER.error("SLACK_SIGNING_SECRET is not set")
+    return false
+  end
+
   # Reject requests older than 5 minutes
-  return false if (Time.now.to_i - timestamp.to_i).abs > 300
+  if (Time.now.to_i - timestamp.to_i).abs > 300
+    APP_LOGGER.warn("Slack request timestamp too old")
+    return false
+  end
 
   body = request.env["rack.input"].read
   request.env["rack.input"].rewind
@@ -25,7 +48,12 @@ def verify_slack_request(request)
     sig_basestring
   )
 
-  Rack::Utils.secure_compare(my_signature, signature)
+  unless Rack::Utils.secure_compare(my_signature, signature)
+    APP_LOGGER.warn("Slack signature verification failed")
+    return false
+  end
+
+  true
 end
 
 def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, permalink)
@@ -62,7 +90,14 @@ def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, perma
   req["Content-Type"] = "application/json"
   req.body = JSON.generate(payload)
 
-  Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  ok = begin
+    JSON.parse(res.body)["ok"]
+  rescue JSON::ParserError
+    nil
+  end
+  APP_LOGGER.info("Slack views.open response: status=#{res.code} ok=#{ok}")
+  res
 end
 
 def get_permalink(channel_id, message_ts)
@@ -71,6 +106,7 @@ def get_permalink(channel_id, message_ts)
   req["Authorization"] = "Bearer #{ENV["SLACK_BOT_TOKEN"]}"
 
   res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  APP_LOGGER.info("Slack chat.getPermalink response: status=#{res.code}")
   JSON.parse(res.body)["permalink"]
 end
 
@@ -106,16 +142,34 @@ def create_notion_page(task_name, permalink, message_text)
   req["Notion-Version"] = "2022-06-28"
   req.body = JSON.generate(payload)
 
-  Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  APP_LOGGER.info("Notion create page response: status=#{res.code}")
+  res
 end
 
 # --- Routes ---
+
+get "/health" do
+  content_type :json
+  JSON.generate({ status: "ok" })
+end
 
 post "/slack/actions" do
   # Verify signature
   halt 403, "Unauthorized" unless verify_slack_request(request)
 
-  payload = JSON.parse(params["payload"])
+  raw_payload = params["payload"]
+  unless raw_payload
+    APP_LOGGER.warn("Missing payload param")
+    halt 400, "Bad Request"
+  end
+
+  payload = begin
+    JSON.parse(raw_payload)
+  rescue JSON::ParserError
+    APP_LOGGER.warn("Failed to parse payload JSON")
+    halt 400, "Bad Request"
+  end
 
   case payload["type"]
 
@@ -125,6 +179,7 @@ post "/slack/actions" do
     channel_id = payload["channel"]["id"]
     message_ts = message["ts"]
     message_text = message["text"] || ""
+    APP_LOGGER.info("message_action received: channel=#{channel_id} ts=#{message_ts}")
 
     permalink = get_permalink(channel_id, message_ts)
     open_task_name_modal(payload["trigger_id"], message_ts, channel_id, message_text, permalink)
@@ -137,6 +192,7 @@ post "/slack/actions" do
     if payload.dig("view", "callback_id") == "task_name_modal"
       task_name = payload.dig("view", "state", "values", "task_name_block", "task_name_input", "value")
       metadata = JSON.parse(payload.dig("view", "private_metadata"))
+      APP_LOGGER.info("view_submission received: task_name_present=#{!task_name.to_s.strip.empty?}")
 
       create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
 
