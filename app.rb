@@ -31,6 +31,26 @@ def log_event(event:, req_id:, status: nil, detail: nil)
   APP_LOGGER.info(parts.join(" "))
 end
 
+def with_retry(label:, max_retries: 2, base_delay: 0.5)
+  attempts = 0
+  begin
+    attempts += 1
+    res = yield
+    if res.is_a?(Net::HTTPServerError)
+      raise "server_error_#{res.code}"
+    end
+    res
+  rescue StandardError => e
+    if attempts <= max_retries
+      sleep_time = base_delay * attempts + rand * 0.25
+      APP_LOGGER.warn("#{label} retry=#{attempts} error=#{e.class} #{e}")
+      sleep(sleep_time)
+      retry
+    end
+    raise
+  end
+end
+
 before do
   @req_id = "#{Time.now.to_i}-#{rand(1000..9999)}"
 end
@@ -119,7 +139,9 @@ def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, perma
   req.body = JSON.generate(payload)
 
   start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  res = with_retry(label: "slack.views_open") do
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  end
   latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
   ok = begin
     JSON.parse(res.body)["ok"]
@@ -136,7 +158,9 @@ def get_permalink(channel_id, message_ts)
   req["Authorization"] = "Bearer #{ENV["SLACK_BOT_TOKEN"]}"
 
   start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  res = with_retry(label: "slack.get_permalink") do
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  end
   latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
   APP_LOGGER.info("Slack chat.getPermalink response: status=#{res.code} latency_ms=#{latency_ms}")
   JSON.parse(res.body)["permalink"]
@@ -175,7 +199,9 @@ def create_notion_page(task_name, permalink, message_text)
   req.body = JSON.generate(payload)
 
   start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  res = with_retry(label: "notion.create_page") do
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  end
   latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
   APP_LOGGER.info("Notion create page response: status=#{res.code} latency_ms=#{latency_ms}")
   unless res.is_a?(Net::HTTPSuccess)
@@ -231,15 +257,33 @@ post "/slack/actions" do
     if payload.dig("view", "callback_id") == "task_name_modal"
       task_name = payload.dig("view", "state", "values", "task_name_block", "task_name_input", "value")
       metadata = JSON.parse(payload.dig("view", "private_metadata"))
+      task_name = "Task from Slack" if task_name.to_s.strip.empty?
       log_event(event: "slack.view_submission", req_id: @req_id, detail: "task_name_present=#{!task_name.to_s.strip.empty?}")
 
-      notion_res = create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
-      status = notion_res.is_a?(Net::HTTPSuccess) ? "ok" : "error"
-      log_event(event: "notion.create_page", req_id: @req_id, status: status)
+      begin
+        notion_res = create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
+        status_flag = notion_res.is_a?(Net::HTTPSuccess) ? "ok" : "error"
+        log_event(event: "notion.create_page", req_id: @req_id, status: status_flag)
 
-      status 200
-      content_type :json
-      JSON.generate({ response_action: "clear" })
+        status 200
+        content_type :json
+        if notion_res.is_a?(Net::HTTPSuccess)
+          JSON.generate({ response_action: "clear" })
+        else
+          JSON.generate({
+            response_action: "errors",
+            errors: { "task_name_block" => "Notion error. Please try again." }
+          })
+        end
+      rescue StandardError => e
+        APP_LOGGER.error("Notion create page failed: #{e.class} #{e}")
+        status 200
+        content_type :json
+        JSON.generate({
+          response_action: "errors",
+          errors: { "task_name_block" => "Notion error. Please try again." }
+        })
+      end
     end
 
   end
