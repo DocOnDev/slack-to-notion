@@ -14,6 +14,16 @@ set :port, ENV["PORT"] || 4567
 # We disable only the host header check to allow the public Railway domain.
 set :protection, except: :host_header
 
+allowed_hosts = ENV.fetch("ALLOWED_HOSTS", "")
+  .split(",")
+  .map(&:strip)
+  .reject(&:empty?)
+if allowed_hosts.empty?
+  allowed_hosts = [".up.railway.app", "localhost", "127.0.0.1", "::1"]
+end
+set :host_authorization, { permitted_hosts: allowed_hosts }
+APP_LOGGER.info("Host authorization permitted_hosts=#{allowed_hosts}")
+
 before do
   if request.path_info == "/slack/actions"
     APP_LOGGER.info("Incoming Slack request: #{request.request_method} #{request.path_info}")
