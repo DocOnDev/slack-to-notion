@@ -174,6 +174,10 @@ def create_notion_page(task_name, permalink, message_text)
 
   res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
   APP_LOGGER.info("Notion create page response: status=#{res.code}")
+  unless res.is_a?(Net::HTTPSuccess)
+    body_preview = res.body.to_s[0, 1500]
+    APP_LOGGER.warn("Notion error body: #{body_preview}")
+  end
   res
 end
 
