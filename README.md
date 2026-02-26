@@ -118,6 +118,13 @@ If the modal opens but no Notion page appears:
   - `Source` (URL)
   - `Status` (Status with an `Incoming` option)
 
+If the task name is left blank:
+- The app will default the title to `Task from Slack`.
+
+Transient API failures:
+- The app retries Slack/Notion API calls briefly on timeouts or 5xx responses.
+- If Notion still fails, the modal stays open with a friendly error message.
+
 ## Project hygiene
 
 - Keep secrets in Railway Variables or `.env` (never commit them).
