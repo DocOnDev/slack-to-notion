@@ -35,6 +35,11 @@ def verify_slack_request(request)
   timestamp = request.env["HTTP_X_SLACK_REQUEST_TIMESTAMP"]
   signature = request.env["HTTP_X_SLACK_SIGNATURE"]
 
+  slack_debug = ENV["SLACK_DEBUG"].to_s.strip == "true"
+  if slack_debug
+    APP_LOGGER.info("Slack headers: timestamp=#{timestamp.inspect} signature=#{signature.inspect}")
+  end
+
   if timestamp.nil? || signature.nil?
     APP_LOGGER.warn("Missing Slack signature headers")
     return false
@@ -53,6 +58,9 @@ def verify_slack_request(request)
 
   body = request.env["rack.input"].read
   request.env["rack.input"].rewind
+  if slack_debug
+    APP_LOGGER.info("Slack body length=#{body.bytesize}")
+  end
 
   sig_basestring = "v0:#{timestamp}:#{body}"
   my_signature = "v0=" + OpenSSL::HMAC.hexdigest(
@@ -62,7 +70,11 @@ def verify_slack_request(request)
   )
 
   unless Rack::Utils.secure_compare(my_signature, signature)
-    APP_LOGGER.warn("Slack signature verification failed")
+    if slack_debug
+      APP_LOGGER.warn("Slack signature verification failed: computed=#{my_signature[0, 14]}... received=#{signature[0, 14]}...")
+    else
+      APP_LOGGER.warn("Slack signature verification failed")
+    end
     return false
   end
 
