@@ -144,7 +144,7 @@ def create_notion_page(task_name, permalink, message_text)
   payload = {
     parent: { database_id: ENV["NOTION_DATABASE_ID"] },
     properties: {
-      "Task Name" => {
+      "Task name" => {
         title: [{ text: { content: task_name } }]
       },
       "Source" => {
