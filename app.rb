@@ -118,13 +118,15 @@ def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, perma
   req["Content-Type"] = "application/json"
   req.body = JSON.generate(payload)
 
+  start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
   ok = begin
     JSON.parse(res.body)["ok"]
   rescue JSON::ParserError
     nil
   end
-  APP_LOGGER.info("Slack views.open response: status=#{res.code} ok=#{ok}")
+  APP_LOGGER.info("Slack views.open response: status=#{res.code} ok=#{ok} latency_ms=#{latency_ms}")
   res
 end
 
@@ -133,8 +135,10 @@ def get_permalink(channel_id, message_ts)
   req = Net::HTTP::Get.new(uri)
   req["Authorization"] = "Bearer #{ENV["SLACK_BOT_TOKEN"]}"
 
+  start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
-  APP_LOGGER.info("Slack chat.getPermalink response: status=#{res.code}")
+  latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
+  APP_LOGGER.info("Slack chat.getPermalink response: status=#{res.code} latency_ms=#{latency_ms}")
   JSON.parse(res.body)["permalink"]
 end
 
@@ -170,8 +174,10 @@ def create_notion_page(task_name, permalink, message_text)
   req["Notion-Version"] = "2022-06-28"
   req.body = JSON.generate(payload)
 
+  start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
-  APP_LOGGER.info("Notion create page response: status=#{res.code}")
+  latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
+  APP_LOGGER.info("Notion create page response: status=#{res.code} latency_ms=#{latency_ms}")
   unless res.is_a?(Net::HTTPSuccess)
     body_preview = res.body.to_s[0, 1500]
     APP_LOGGER.warn("Notion error body: #{body_preview}")
