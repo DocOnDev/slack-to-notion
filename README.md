@@ -125,6 +125,12 @@ Transient API failures:
 - The app retries Slack/Notion API calls briefly on timeouts or 5xx responses.
 - If Notion still fails, the modal stays open with a friendly error message.
 
+## Reliability
+
+- Slack and Notion API calls include short retries for transient failures.
+- Notion errors are surfaced in the modal so failures are visible to the user.
+- Empty task names default to `Task from Slack`.
+
 ## Project hygiene
 
 - Keep secrets in Railway Variables or `.env` (never commit them).
