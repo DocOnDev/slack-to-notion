@@ -56,8 +56,13 @@ def verify_slack_request(request)
     return false
   end
 
-  body = request.env["rack.input"].read
-  request.env["rack.input"].rewind
+  # Slack signs the raw request body. For form-encoded requests,
+  # Rack stores the original string in rack.request.form_vars.
+  body = request.env["rack.request.form_vars"].to_s
+  if body.empty?
+    body = request.body.read.to_s
+    request.body.rewind
+  end
   if slack_debug
     APP_LOGGER.info("Slack body length=#{body.bytesize}")
   end
