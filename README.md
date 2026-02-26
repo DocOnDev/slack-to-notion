@@ -105,6 +105,8 @@ ngrok http 4567
 
 Point the Slack app's Request URL at the ngrok HTTPS URL while developing. Switch it back to your Railway URL when done.
 
+For more details, see `CONTRIBUTING.md`.
+
 ## Troubleshooting
 
 If the Slack shortcut appears but fails immediately:
