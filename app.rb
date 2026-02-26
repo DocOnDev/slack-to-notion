@@ -24,9 +24,20 @@ end
 set :host_authorization, { permitted_hosts: allowed_hosts }
 APP_LOGGER.info("Host authorization permitted_hosts=#{allowed_hosts}")
 
+def log_event(event:, req_id:, status: nil, detail: nil)
+  parts = ["event=#{event}", "req_id=#{req_id}"]
+  parts << "status=#{status}" if status
+  parts << "detail=#{detail}" if detail
+  APP_LOGGER.info(parts.join(" "))
+end
+
+before do
+  @req_id = "#{Time.now.to_i}-#{rand(1000..9999)}"
+end
+
 before do
   if request.path_info == "/slack/actions"
-    APP_LOGGER.info("Incoming Slack request: #{request.request_method} #{request.path_info}")
+    log_event(event: "slack.request", req_id: @req_id, status: request.request_method)
   end
 end
 
@@ -200,10 +211,11 @@ post "/slack/actions" do
     channel_id = payload["channel"]["id"]
     message_ts = message["ts"]
     message_text = message["text"] || ""
-    APP_LOGGER.info("message_action received: channel=#{channel_id} ts=#{message_ts}")
+    log_event(event: "slack.message_action", req_id: @req_id, detail: "channel=#{channel_id} ts=#{message_ts}")
 
     permalink = get_permalink(channel_id, message_ts)
     open_task_name_modal(payload["trigger_id"], message_ts, channel_id, message_text, permalink)
+    log_event(event: "slack.views_open", req_id: @req_id, status: "ok")
 
     status 200
     body ""
@@ -213,9 +225,11 @@ post "/slack/actions" do
     if payload.dig("view", "callback_id") == "task_name_modal"
       task_name = payload.dig("view", "state", "values", "task_name_block", "task_name_input", "value")
       metadata = JSON.parse(payload.dig("view", "private_metadata"))
-      APP_LOGGER.info("view_submission received: task_name_present=#{!task_name.to_s.strip.empty?}")
+      log_event(event: "slack.view_submission", req_id: @req_id, detail: "task_name_present=#{!task_name.to_s.strip.empty?}")
 
-      create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
+      notion_res = create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
+      status = notion_res.is_a?(Net::HTTPSuccess) ? "ok" : "error"
+      log_event(event: "notion.create_page", req_id: @req_id, status: status)
 
       status 200
       content_type :json
