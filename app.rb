@@ -10,6 +10,9 @@ APP_LOGGER = Logger.new($stdout)
 APP_LOGGER.level = Logger::INFO
 
 set :port, ENV["PORT"] || 4567
+# Railway sends a Host header that Rack::Protection blocks by default.
+# We disable only the host header check to allow the public Railway domain.
+set :protection, except: :host_header
 
 before do
   if request.path_info == "/slack/actions"
