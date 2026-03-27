@@ -104,7 +104,7 @@ def verify_slack_request(request)
   true
 end
 
-def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, permalink)
+def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, permalink, poster_name = nil, channel_name = nil)
   payload = {
     trigger_id: trigger_id,
     view: {
@@ -115,7 +115,9 @@ def open_task_name_modal(trigger_id, message_ts, channel_id, message_text, perma
       close: { type: "plain_text", text: "Cancel" },
       private_metadata: JSON.generate({
         permalink: permalink,
-        message_text: message_text
+        message_text: message_text,
+        poster_name: poster_name,
+        channel_name: channel_name
       }),
       blocks: [
         {
@@ -166,7 +168,54 @@ def get_permalink(channel_id, message_ts)
   JSON.parse(res.body)["permalink"]
 end
 
-def create_notion_page(task_name, permalink, message_text)
+def get_slack_user_name(user_id)
+  return nil if user_id.to_s.strip.empty?
+
+  uri = URI("https://slack.com/api/users.info?user=#{user_id}")
+  req = Net::HTTP::Get.new(uri)
+  req["Authorization"] = "Bearer #{ENV["SLACK_BOT_TOKEN"]}"
+
+  start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  res = with_retry(label: "slack.users_info") do
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  end
+  latency_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time) * 1000).round
+  APP_LOGGER.info("Slack users.info response: status=#{res.code} latency_ms=#{latency_ms}")
+  data = JSON.parse(res.body)
+  return nil unless data["ok"]
+
+  data.dig("user", "real_name") || data.dig("user", "profile", "display_name") || data.dig("user", "name")
+rescue StandardError => e
+  APP_LOGGER.warn("Failed to look up Slack user #{user_id}: #{e}")
+  nil
+end
+
+def create_notion_page(task_name, permalink, message_text, poster_name: nil, channel_name: nil)
+  # Build the page body with metadata header
+  body_blocks = []
+
+  if poster_name || channel_name
+    meta_parts = []
+    meta_parts << "From: #{poster_name}" if poster_name
+    meta_parts << "##{channel_name}" if channel_name
+    body_blocks << {
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [{ type: "text", text: { content: meta_parts.join(" | ") } }]
+      }
+    }
+    body_blocks << { object: "block", type: "divider", divider: {} }
+  end
+
+  body_blocks << {
+    object: "block",
+    type: "paragraph",
+    paragraph: {
+      rich_text: [{ type: "text", text: { content: message_text } }]
+    }
+  }
+
   payload = {
     parent: { database_id: ENV["NOTION_DATABASE_ID"] },
     properties: {
@@ -180,15 +229,7 @@ def create_notion_page(task_name, permalink, message_text)
         status: { name: "Incoming" }
       }
     },
-    children: [
-      {
-        object: "block",
-        type: "paragraph",
-        paragraph: {
-          rich_text: [{ type: "text", text: { content: message_text } }]
-        }
-      }
-    ]
+    children: body_blocks
   }
 
   uri = URI("https://api.notion.com/v1/pages")
@@ -241,12 +282,15 @@ post "/slack/actions" do
     # Shortcut was triggered -- grab message context and open modal
     message = payload["message"]
     channel_id = payload["channel"]["id"]
+    channel_name = payload["channel"]["name"] || channel_id
     message_ts = message["ts"]
     message_text = message["text"] || ""
-    log_event(event: "slack.message_action", req_id: @req_id, detail: "channel=#{channel_id} ts=#{message_ts}")
+    poster_id = message["user"]
+    poster_name = get_slack_user_name(poster_id) || "Unknown"
+    log_event(event: "slack.message_action", req_id: @req_id, detail: "channel=#{channel_id} ts=#{message_ts} poster=#{poster_name}")
 
     permalink = get_permalink(channel_id, message_ts)
-    open_task_name_modal(payload["trigger_id"], message_ts, channel_id, message_text, permalink)
+    open_task_name_modal(payload["trigger_id"], message_ts, channel_id, message_text, permalink, poster_name, channel_name)
     log_event(event: "slack.views_open", req_id: @req_id, status: "ok")
 
     status 200
@@ -261,7 +305,13 @@ post "/slack/actions" do
       log_event(event: "slack.view_submission", req_id: @req_id, detail: "task_name_present=#{!task_name.to_s.strip.empty?}")
 
       begin
-        notion_res = create_notion_page(task_name, metadata["permalink"], metadata["message_text"])
+        notion_res = create_notion_page(
+          task_name,
+          metadata["permalink"],
+          metadata["message_text"],
+          poster_name: metadata["poster_name"],
+          channel_name: metadata["channel_name"]
+        )
         status_flag = notion_res.is_a?(Net::HTTPSuccess) ? "ok" : "error"
         log_event(event: "notion.create_page", req_id: @req_id, status: status_flag)
 
